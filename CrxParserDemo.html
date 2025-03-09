@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRX Parser Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .container {
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        #dropZone {
+            border: 2px dashed #ccc;
+            border-radius: 4px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            margin-bottom: 20px;
+            background-color: #f9f9f9;
+        }
+        #dropZone.highlight {
+            border-color: #2196F3;
+            background-color: #e3f2fd;
+        }
+        .hidden {
+            display: none;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            max-height: 300px;
+        }
+        .button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        progress {
+            width: 100%;
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+            padding: 10px;
+            background-color: #ffebee;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+<h1>CRX Parser Demo</h1>
+<p>This demo shows how to parse Chrome Extension (CRX) files using WebAssembly.</p>
+
+<div class="container">
+    <div id="initStatus">Initializing WebAssembly module...</div>
+    <progress id="initProgress" class="hidden"></progress>
+</div>
+
+<div class="container">
+    <div id="dropZone">
+        <p>Drop a CRX file here or click to select</p>
+        <input type="file" id="fileInput" accept=".crx" class="hidden">
+    </div>
+
+    <div id="errorContainer" class="error hidden"></div>
+
+    <div id="resultContainer" class="hidden">
+        <h2>CRX Information</h2>
+        <pre id="crxInfo"></pre>
+
+        <button id="downloadZip" class="button">Extract ZIP Content</button>
+    </div>
+</div>
+
+<script type="module">
+    import { CrxParser } from './js/index.js';
+
+    // DOM Elements
+    const initStatus = document.getElementById('initStatus');
+    const initProgress = document.getElementById('initProgress');
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const errorContainer = document.getElementById('errorContainer');
+    const resultContainer = document.getElementById('resultContainer');
+    const crxInfoElement = document.getElementById('crxInfo');
+    const downloadZipButton = document.getElementById('downloadZip');
+
+    // Variables
+    let crxBuffer = null;
+    let filename = '';
+
+    // Initialize WebAssembly module
+    async function init() {
+        try {
+            initProgress.classList.remove('hidden');
+            await CrxParser.initialize();
+            initStatus.textContent = '✓ WebAssembly module loaded successfully!';
+            initStatus.style.color = 'green';
+            setTimeout(() => {
+                initStatus.textContent = 'Ready to parse CRX files';
+            }, 2000);
+        } catch (error) {
+            console.error('WebAssembly initialization failed:', error);
+            initStatus.textContent = '✗ Failed to load WebAssembly module: ' + error.message;
+            initStatus.style.color = 'red';
+            showError('WebAssembly initialization failed. Please check console for details.');
+        } finally {
+            initProgress.classList.add('hidden');
+        }
+    }
+
+    // Parse CRX file
+    async function processCrxFile(buffer, name) {
+        try {
+            clearError();
+            resultContainer.classList.add('hidden');
+
+            // Save for later use
+            crxBuffer = buffer;
+            filename = name;
+
+            // Parse CRX
+            const crxInfo = await CrxParser.parse(buffer);
+
+            // Display results
+            const infoText = JSON.stringify({
+                filename: name,
+                version: crxInfo.version,
+                publicKeySize: crxInfo.publicKey.length,
+                signatureSize: crxInfo.signature.length,
+                zipOffset: crxInfo.zipOffset
+            }, null, 2);
+
+            crxInfoElement.textContent = infoText;
+            resultContainer.classList.remove('hidden');
+        } catch (error) {
+            console.error('Error parsing CRX:', error);
+            showError('Failed to parse CRX file: ' + error.message);
+        }
+    }
+
+    // Extract ZIP content
+    async function extractZipContent() {
+        if (!crxBuffer) return;
+
+        try {
+            downloadZipButton.disabled = true;
+            downloadZipButton.textContent = 'Extracting...';
+
+            const zipData = await CrxParser.extractZip(crxBuffer);
+
+            // Create download link
+            const blob = new Blob([zipData], { type: 'application/zip' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename.replace('.crx', '.zip');
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('Error extracting ZIP:', error);
+            showError('Failed to extract ZIP content: ' + error.message);
+        } finally {
+            downloadZipButton.disabled = false;
+            downloadZipButton.textContent = 'Extract ZIP Content';
+        }
+    }
+
+    // Show error message
+    function showError(message) {
+        errorContainer.textContent = message;
+        errorContainer.classList.remove('hidden');
+    }
+
+    // Clear error message
+    function clearError() {
+        errorContainer.textContent = '';
+        errorContainer.classList.add('hidden');
+    }
+
+    // Handle file selection
+    function handleFileSelect(file) {
+        if (!file) return;
+
+        if (!file.name.endsWith('.crx')) {
+            showError('Please select a valid .crx file.');
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = e => {
+            processCrxFile(e.target.result, file.name);
+        };
+        reader.onerror = () => {
+            showError('Error reading file: ' + reader.error);
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    // Event Listeners
+    dropZone.addEventListener('click', () => {
+        fileInput.click();
+    });
+
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFileSelect(e.target.files[0]);
+        }
+    });
+
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('highlight');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('highlight');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('highlight');
+        if (e.dataTransfer.files.length > 0) {
+            handleFileSelect(e.dataTransfer.files[0]);
+        }
+    });
+
+    downloadZipButton.addEventListener('click', extractZipContent);
+
+    // Initialize the app
+    init();
+</script>
+</body>
+</html>
